@@ -1,8 +1,9 @@
 use egui::{ClippedPrimitive, Context};
-use egui_wgpu::renderer::ScreenDescriptor;
+use egui_wgpu::{RendererOptions, ScreenDescriptor};
+use wgpu::CommandEncoder;
 
 pub struct GuiHandler {
-    ctx: egui::Context,
+    ctx: Context,
     pub renderer: egui_wgpu::Renderer,
     state: egui_winit::State,
 }
@@ -13,10 +14,11 @@ impl GuiHandler {
         format: wgpu::TextureFormat,
         device: &wgpu::Device,
     ) -> Self {
-        let ctx = egui::Context::default();
-        let state = egui_winit::State::new(&window);
+        let ctx = Context::default();
+        let state =
+            egui_winit::State::new(ctx.clone(), ctx.viewport_id(), &window, None, None, None);
 
-        let renderer = egui_wgpu::Renderer::new(device, format, None, 1);
+        let renderer = egui_wgpu::Renderer::new(device, format, RendererOptions::default());
 
         Self {
             ctx,
@@ -25,12 +27,16 @@ impl GuiHandler {
         }
     }
 
-    pub fn handle_event(&mut self, event: &winit::event::Event<()>) -> bool {
+    pub fn handle_event(
+        &mut self,
+        event: &winit::event::Event<()>,
+        window: &winit::window::Window,
+    ) -> bool {
         match event {
             winit::event::Event::WindowEvent {
                 window_id: _,
                 event,
-            } => self.state.on_event(&self.ctx, event).consumed,
+            } => self.state.on_window_event(window, event).consumed,
             _ => false,
         }
     }
@@ -40,26 +46,26 @@ impl GuiHandler {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         window: &winit::window::Window,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut CommandEncoder,
         gui: &mut dyn FnMut(&Context),
     ) -> (Vec<ClippedPrimitive>, ScreenDescriptor) {
-        let screen_descriptor = {
-            let size = window.inner_size();
-            egui_wgpu::renderer::ScreenDescriptor {
-                size_in_pixels: [size.width, size.height],
-                pixels_per_point: window.scale_factor() as f32,
-            }
-        };
-
         let raw_input: egui::RawInput = self.state.take_egui_input(window);
-        self.ctx.begin_frame(raw_input);
-        gui(&self.ctx);
-        let full_output = self.ctx.end_frame();
+
+        let full_output = self.ctx.run(raw_input, |ctx| {
+            gui(ctx);
+        });
 
         self.state
-            .handle_platform_output(window, &self.ctx, full_output.platform_output);
+            .handle_platform_output(window, full_output.platform_output);
 
-        let clipped_primitives = self.ctx.tessellate(full_output.shapes);
+        let size = window.inner_size();
+        let pixels_per_point = full_output.pixels_per_point;
+        let screen_descriptor = ScreenDescriptor {
+            size_in_pixels: [size.width, size.height],
+            pixels_per_point,
+        };
+
+        let clipped_primitives = self.ctx.tessellate(full_output.shapes, pixels_per_point);
 
         self.renderer.update_buffers(
             device,

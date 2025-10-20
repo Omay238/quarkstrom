@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use egui::{mutex::Mutex, Color32, Response, Ui};
+use egui::{Color32, Response, Ui, mutex::Mutex};
 use fastrand;
 use quarkstrom;
 use ultraviolet::Vec2;
@@ -84,6 +84,100 @@ impl quarkstrom::Renderer for Renderer {
         }
     }
 
+    fn input(&mut self, input: &winit_input_helper::WinitInputHelper, width: u16, height: u16) {
+        if let Some((mx, my)) = input.cursor() {
+            // Scroll steps to double/halve the scale
+            let steps = 5.0;
+
+            // Modify input
+            let zoom = (-input.scroll_diff().1 / steps).exp2();
+
+            // Screen space -> view space
+            let target =
+                Vec2::new(mx * 2.0 - width as f32, height as f32 - my * 2.0) / height as f32;
+
+            // Move view position based on target
+            self.pos += target * self.scale * (1.0 - zoom);
+
+            // Zoom
+            self.scale *= zoom;
+        }
+
+        // Grab
+        if input.mouse_held(winit::event::MouseButton::Left) {
+            let (mdx, mdy) = input.mouse_diff();
+            self.pos.x -= mdx / height as f32 * self.scale * 2.0;
+            self.pos.y += mdy / height as f32 * self.scale * 2.0;
+        }
+    }
+
+    fn render(&mut self, ctx: &mut quarkstrom::RenderContext) {
+        ctx.set_view_pos(self.pos);
+        ctx.set_view_scale(self.scale);
+
+        if let Some(particles) = PARTICLES.lock().clone() {
+            ctx.clear_circles();
+            ctx.clear_lines();
+
+            for particle in particles {
+                ctx.draw_circle(
+                    particle.pos,
+                    1.0,
+                    hue2u8x4(particle.typ as f32 / self.types as f32),
+                );
+
+                match self.boundary {
+                    Boundary::Square(side) => {
+                        let s = side * 0.5;
+                        let p = [
+                            Vec2::new(s, s),
+                            Vec2::new(s, -s),
+                            Vec2::new(-s, -s),
+                            Vec2::new(-s, s),
+                        ];
+                        ctx.draw_line(p[0], p[1], [0x08, 0x08, 0x08, 0xff]);
+                        ctx.draw_line(p[1], p[2], [0x08, 0x08, 0x08, 0xff]);
+                        ctx.draw_line(p[2], p[3], [0x08, 0x08, 0x08, 0xff]);
+                        ctx.draw_line(p[3], p[0], [0x08, 0x08, 0x08, 0xff]);
+
+                        for x in -1..=1 {
+                            for y in -1..=1 {
+                                if x == 0 && y == 0 {
+                                    continue;
+                                }
+                                ctx.draw_circle(
+                                    particle.pos + Vec2::new(side * x as f32, side * y as f32),
+                                    1.0,
+                                    [0x88, 0x88, 0x88, 0xff],
+                                );
+                            }
+                        }
+                    }
+                    Boundary::ReflectedCircle(radius) => {
+                        if particle.pos != Vec2::zero() {
+                            ctx.draw_circle(
+                                particle.pos * (1.0 - particle.pos.mag().recip() * (2.0 * radius)),
+                                1.0,
+                                [0x88, 0x88, 0x88, 0xff],
+                            );
+                        }
+                    }
+                    Boundary::InverseCircle(radius) => {
+                        let mag_sq = particle.pos.mag_sq();
+                        if mag_sq > 0.1 * radius {
+                            ctx.draw_circle(
+                                -particle.pos / mag_sq * radius * radius,
+                                1.0 / mag_sq * radius * radius,
+                                [0x88, 0x88, 0x88, 0xff],
+                            );
+                        }
+                    }
+                    Boundary::None => {}
+                }
+            }
+        }
+    }
+
     fn gui(&mut self, ctx: &egui::Context) {
         fn hue2rgb(c: f32) -> [u8; 4] {
             return [
@@ -96,7 +190,7 @@ impl quarkstrom::Renderer for Renderer {
         let texture = self.texture.get_or_insert_with(|| {
             ctx.load_texture(
                 "Square",
-                egui::ColorImage::new([1, 1], egui::Color32::WHITE),
+                egui::ColorImage::new([1, 1], vec![Color32::WHITE]),
                 Default::default(),
             )
         });
@@ -217,8 +311,9 @@ impl quarkstrom::Renderer for Renderer {
 
             fn color(ui: &mut Ui, texture: &egui::TextureHandle, color: [u8; 4]) -> Response {
                 ui.add(
-                    egui::ImageButton::new(texture.id(), [32.0, 32.0])
-                        .tint(Color32::from_rgb(color[0], color[1], color[2])),
+                    egui::widgets::Button::image(texture)
+                        .fill(Color32::from_rgb(color[0], color[1], color[2]))
+                        .min_size(egui::Vec2::new(32.0, 32.0)),
                 )
             }
 
@@ -245,100 +340,6 @@ impl quarkstrom::Renderer for Renderer {
         });
 
         RENDERER_CLONE.lock().push(self.clone());
-    }
-
-    fn input(&mut self, input: &winit_input_helper::WinitInputHelper, width: u16, height: u16) {
-        if let Some((mx, my)) = input.mouse() {
-            // Scroll steps to double/halve the scale
-            let steps = 5.0;
-
-            // Modify input
-            let zoom = (-input.scroll_diff() / steps).exp2();
-
-            // Screen space -> view space
-            let target =
-                Vec2::new(mx * 2.0 - width as f32, height as f32 - my * 2.0) / height as f32;
-
-            // Move view position based on target
-            self.pos += target * self.scale * (1.0 - zoom);
-
-            // Zoom
-            self.scale *= zoom;
-        }
-
-        // Grab
-        if input.mouse_held(2) {
-            let (mdx, mdy) = input.mouse_diff();
-            self.pos.x -= mdx / height as f32 * self.scale * 2.0;
-            self.pos.y += mdy / height as f32 * self.scale * 2.0;
-        }
-    }
-
-    fn render(&mut self, ctx: &mut quarkstrom::RenderContext) {
-        ctx.set_view_pos(self.pos);
-        ctx.set_view_scale(self.scale);
-
-        if let Some(particles) = PARTICLES.lock().clone() {
-            ctx.clear_circles();
-            ctx.clear_lines();
-
-            for particle in particles {
-                ctx.draw_circle(
-                    particle.pos,
-                    1.0,
-                    hue2u8x4(particle.typ as f32 / self.types as f32),
-                );
-
-                match self.boundary {
-                    Boundary::Square(side) => {
-                        let s = side * 0.5;
-                        let p = [
-                            Vec2::new(s, s),
-                            Vec2::new(s, -s),
-                            Vec2::new(-s, -s),
-                            Vec2::new(-s, s),
-                        ];
-                        ctx.draw_line(p[0], p[1], [0x08, 0x08, 0x08, 0xff]);
-                        ctx.draw_line(p[1], p[2], [0x08, 0x08, 0x08, 0xff]);
-                        ctx.draw_line(p[2], p[3], [0x08, 0x08, 0x08, 0xff]);
-                        ctx.draw_line(p[3], p[0], [0x08, 0x08, 0x08, 0xff]);
-
-                        for x in -1..=1 {
-                            for y in -1..=1 {
-                                if x == 0 && y == 0 {
-                                    continue;
-                                }
-                                ctx.draw_circle(
-                                    particle.pos + Vec2::new(side * x as f32, side * y as f32),
-                                    1.0,
-                                    [0x88, 0x88, 0x88, 0xff],
-                                );
-                            }
-                        }
-                    }
-                    Boundary::ReflectedCircle(radius) => {
-                        if particle.pos != Vec2::zero() {
-                            ctx.draw_circle(
-                                particle.pos * (1.0 - particle.pos.mag().recip() * (2.0 * radius)),
-                                1.0,
-                                [0x88, 0x88, 0x88, 0xff],
-                            );
-                        }
-                    }
-                    Boundary::InverseCircle(radius) => {
-                        let mag_sq = particle.pos.mag_sq();
-                        if mag_sq > 0.1 * radius {
-                            ctx.draw_circle(
-                                -particle.pos / mag_sq * radius * radius,
-                                1.0 / mag_sq * radius * radius,
-                                [0x88, 0x88, 0x88, 0xff],
-                            );
-                        }
-                    }
-                    Boundary::None => {}
-                }
-            }
-        }
     }
 }
 

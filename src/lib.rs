@@ -1,5 +1,7 @@
 pub mod gui;
+
 pub use egui;
+use std::sync::Arc;
 pub use wgpu;
 pub use winit;
 pub use winit_input_helper;
@@ -8,14 +10,18 @@ use bytemuck::{Pod, Zeroable};
 
 use crate::gui::GuiHandler;
 use ultraviolet::Vec2;
+use wgpu::StoreOp;
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::*,
-    event_loop::{ControlFlow, EventLoopBuilder},
-    window::{Window, WindowBuilder},
+    event_loop::EventLoopBuilder,
+    window::{Window, WindowAttributes},
 };
 
 use wgpu::util::DeviceExt;
+use winit::application::ApplicationHandler;
+use winit::event_loop::ActiveEventLoop;
+use winit::window::WindowId;
 use winit_input_helper::WinitInputHelper;
 
 #[repr(C)]
@@ -47,7 +53,7 @@ impl Rect {
 
     fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Rect>() as wgpu::BufferAddress,
+            array_stride: size_of::<Rect>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &Self::ATTRIBS,
         }
@@ -70,7 +76,7 @@ impl Vertex {
 
     fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &Self::ATTRIBS,
         }
@@ -94,7 +100,7 @@ impl Instance {
 
     fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Instance>() as wgpu::BufferAddress,
+            array_stride: size_of::<Instance>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &Self::ATTRIBS,
         }
@@ -102,12 +108,12 @@ impl Instance {
 }
 
 struct State {
-    window: Window,
-    surface: wgpu::Surface,
+    window: Arc<Window>,
+    surface: Arc<wgpu::Surface<'static>>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    size: winit::dpi::PhysicalSize<u32>,
+    size: PhysicalSize<u32>,
     rects: u32,
     rect_buffer: wgpu::Buffer,
     vertices: u32,
@@ -126,21 +132,19 @@ struct State {
 
 impl State {
     // Creating some of the wgpu types requires async code
-    async fn new(window: Window) -> Self {
+    async fn new(window: Arc<Window>) -> Self {
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
         // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
-            dx12_shader_compiler: Default::default(),
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::PRIMARY,
+            flags: Default::default(),
+            memory_budget_thresholds: Default::default(),
+            backend_options: Default::default(),
         });
 
-        // # Safety
-        //
-        // The surface needs to live as long as the window that created it.
-        // State owns the window so this should be safe.
-        let surface = unsafe { instance.create_surface(&window) }.unwrap();
+        let surface = Arc::new(instance.create_surface(window.clone()).unwrap());
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -152,20 +156,20 @@ impl State {
             .unwrap();
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    features: wgpu::Features::CONSERVATIVE_RASTERIZATION,
-                    // WebGL doesn't support all of wgpu's features, so if
-                    // we're building for the web we'll have to disable some.
-                    limits: if cfg!(target_arch = "wasm32") {
-                        wgpu::Limits::downlevel_webgl2_defaults()
-                    } else {
-                        wgpu::Limits::default()
-                    },
-                    label: None,
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: wgpu::Features::default(),
+                // WebGL doesn't support all of wgpu's features, so if
+                // we're building for the web we'll have to disable some.
+                required_limits: if cfg!(target_arch = "wasm32") {
+                    wgpu::Limits::downlevel_webgl2_defaults()
+                } else {
+                    wgpu::Limits::default()
                 },
-                None, // Trace path
-            )
+                label: None,
+                experimental_features: Default::default(),
+                memory_hints: Default::default(),
+                trace: Default::default(),
+            })
             .await
             .unwrap();
 
@@ -187,12 +191,13 @@ impl State {
             width: size.width,
             height: size.height,
             present_mode: wgpu::PresentMode::AutoVsync, // Could be surface_caps.present_modes[0] but Intel Arc A770 go brrr.
+            desired_maximum_frame_latency: 2,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
         };
         surface.configure(&device, &config);
 
-        let gui = GuiHandler::new(&window, config.format, &device);
+        let gui = GuiHandler::new(window.clone().as_ref(), config.format, &device);
 
         let circle_shader = device.create_shader_module(wgpu::include_wgsl!("circle_shader.wgsl"));
         let line_shader = device.create_shader_module(wgpu::include_wgsl!("line_shader.wgsl"));
@@ -247,12 +252,14 @@ impl State {
             layout: Some(&rect_render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &rect_shader,
-                entry_point: "vs_main",
+                entry_point: Option::from("vs_main"),
+                compilation_options: Default::default(),
                 buffers: &[Rect::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &rect_shader,
-                entry_point: "fs_main",
+                entry_point: Option::from("fs_main"),
+                compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
                     blend: Some(wgpu::BlendState::REPLACE),
@@ -262,7 +269,7 @@ impl State {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleStrip,
                 front_face: wgpu::FrontFace::Ccw,
-                conservative: true,
+                conservative: false,
                 ..Default::default()
             },
             depth_stencil: None,
@@ -272,6 +279,7 @@ impl State {
                 alpha_to_coverage_enabled: false,
             },
             multiview: None,
+            cache: None,
         });
 
         let line_render_pipeline_layout =
@@ -286,12 +294,14 @@ impl State {
             layout: Some(&line_render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &line_shader,
-                entry_point: "vs_main",
+                entry_point: Option::from("vs_main"),
+                compilation_options: Default::default(),
                 buffers: &[Vertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &line_shader,
-                entry_point: "fs_main",
+                entry_point: Option::from("fs_main"),
+                compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
                     blend: Some(wgpu::BlendState::REPLACE),
@@ -310,6 +320,7 @@ impl State {
                 alpha_to_coverage_enabled: false,
             },
             multiview: None,
+            cache: None,
         });
 
         let circle_render_pipeline_layout =
@@ -325,12 +336,14 @@ impl State {
                 layout: Some(&circle_render_pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &circle_shader,
-                    entry_point: "vs_main",
+                    entry_point: Option::from("vs_main"),
+                    compilation_options: Default::default(),
                     buffers: &[Instance::desc()],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &circle_shader,
-                    entry_point: "fs_main",
+                    entry_point: Option::from("fs_main"),
+                    compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: config.format,
                         blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -347,7 +360,7 @@ impl State {
                     // Requires Features::DEPTH_CLIP_CONTROL
                     unclipped_depth: false,
                     // Requires Features::CONSERVATIVE_RASTERIZATION
-                    conservative: true,
+                    conservative: false,
                 },
                 depth_stencil: None, // 1.
                 multisample: wgpu::MultisampleState {
@@ -356,6 +369,7 @@ impl State {
                     alpha_to_coverage_enabled: false,
                 },
                 multiview: None,
+                cache: None,
             });
 
         let rects = 0;
@@ -418,7 +432,7 @@ impl State {
         &self.window
     }
 
-    fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+    fn resize(&mut self, new_size: PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.size = new_size;
             self.config.width = new_size.width;
@@ -450,7 +464,7 @@ impl State {
 
     fn input(&mut self, event: &Event<()>) -> bool {
         // If gui doesn't want exclusive access and it's time to update
-        !self.gui.handle_event(event)
+        !self.gui.handle_event(event, &self.window)
     }
 
     fn render(&mut self, gui: &mut dyn FnMut(&egui::Context)) -> Result<(), wgpu::SurfaceError> {
@@ -474,26 +488,31 @@ impl State {
                 .render(&self.device, &self.queue, &self.window, &mut encoder, gui);
 
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[
-                    // This is what @location(0) in the fragment shader targets
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.0,
-                                g: 0.0,
-                                b: 0.0,
-                                a: 1.0,
-                            }),
-                            store: true,
-                        },
-                    }),
-                ],
-                depth_stencil_attachment: None,
-            });
+            let mut render_pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Render Pass"),
+                    color_attachments: &[
+                        // This is what @location(0) in the fragment shader targets
+                        Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color {
+                                    r: 0.0,
+                                    g: 0.0,
+                                    b: 0.0,
+                                    a: 1.0,
+                                }),
+                                store: StoreOp::Store,
+                            },
+                        }),
+                    ],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                })
+                .forget_lifetime();
 
             render_pass.set_pipeline(&self.rect_render_pipeline);
             render_pass.set_bind_group(0, &self.view_bind_group, &[]);
@@ -598,94 +617,152 @@ pub trait Renderer {
     fn gui(&mut self, ctx: &egui::Context);
 }
 
+struct AppHandler<R: Renderer> {
+    config: Config,
+    state: Option<State>,
+    input: Option<WinitInputHelper>,
+    renderer: Option<R>,
+    render_ctx: Option<RenderContext>,
+}
+
+impl<R: Renderer> ApplicationHandler<()> for AppHandler<R> {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let mut builder = WindowAttributes::default().with_title("Quarkstrom");
+
+        match self.config.window_mode {
+            WindowMode::Windowed(width, height) => {
+                //Set window size
+                builder = builder.with_inner_size(PhysicalSize::new(width, height));
+
+                //If a primary monitor can be found, position the window in the middle
+
+                if let Some(monitor) = event_loop.primary_monitor() {
+                    let size = monitor.size();
+                    let position = PhysicalPosition::new(
+                        (size.width - width) as i32 / 2,
+                        (size.height - height) as i32 / 2,
+                    );
+                    builder = builder.with_position(position);
+                }
+            }
+            WindowMode::Fullscreen => {
+                builder =
+                    builder.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+            }
+        }
+
+        let window = event_loop
+            .create_window(builder)
+            .expect("Failed to create window.");
+
+        self.state = Some(pollster::block_on(State::new(Arc::new(window))));
+        self.input = Some(WinitInputHelper::new());
+        self.renderer = Some(R::new());
+        self.render_ctx = Some(RenderContext::new());
+    }
+
+    fn window_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        if self.state.is_none() {
+            return;
+        }
+        let state = self.state.as_mut().unwrap();
+        let input = self.input.as_mut().unwrap();
+        let renderer = self.renderer.as_mut().unwrap();
+        let mut render_ctx = self.render_ctx.as_mut().unwrap();
+
+        if window_id == state.window().id() {
+            let egui_event = Event::WindowEvent {
+                window_id,
+                event: event.clone(),
+            };
+            state.input(&egui_event);
+
+            input.process_window_event(&event);
+        }
+
+        if window_id == state.window().id() {
+            match event {
+                WindowEvent::CloseRequested
+                | WindowEvent::KeyboardInput {
+                    event:
+                        KeyEvent {
+                            state: ElementState::Pressed,
+                            logical_key:
+                                winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape),
+                            ..
+                        },
+                    ..
+                } => return,
+                WindowEvent::Resized(physical_size) => {
+                    state.resize(physical_size);
+                }
+                WindowEvent::ScaleFactorChanged { .. } => {
+                    state.resize(state.window.inner_size());
+                }
+
+                WindowEvent::RedrawRequested if window_id == state.window().id() => {
+                    renderer.input(&input, state.view.x, state.view.y);
+                    renderer.render(&mut render_ctx);
+                    state.view.position = render_ctx.pos;
+                    state.view.scale = render_ctx.scale;
+                    state.set_instances(&render_ctx.circles);
+                    state.set_vertices(&render_ctx.lines);
+                    state.set_rects(&render_ctx.rects);
+
+                    match state.render(&mut |ctx| renderer.gui(ctx)) {
+                        Ok(_) => {}
+                        // Reconfigure the surface if lost
+                        Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
+                        // The system is out of memory, we should probably quit
+                        Err(wgpu::SurfaceError::OutOfMemory) => return,
+                        // All other errors (Outdated, Timeout) should be resolved by the next frame
+                        Err(e) => eprintln!("{:?}", e),
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        if self.state.is_none() {
+            return;
+        }
+
+        let input = self.input.as_mut().unwrap();
+
+        input.process_device_event(&event);
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        self.state.as_ref().unwrap().window.request_redraw();
+    }
+}
+
 pub fn run<R>(config: Config)
 where
     R: Renderer + 'static,
 {
-    let event_loop = EventLoopBuilder::new().build();
+    let event_loop = EventLoopBuilder::default().build();
 
-    let mut builder = WindowBuilder::new().with_title("Quarkstrom");
-
-    match config.window_mode {
-        WindowMode::Windowed(width, height) => {
-            //Set window size
-            builder = builder.with_inner_size(PhysicalSize::new(width, height));
-
-            //If a primary monitor can be found, position the window in the middle
-            if let Some(monitor) = event_loop.primary_monitor() {
-                let size = monitor.size();
-                let position = PhysicalPosition::new(
-                    (size.width - width) as i32 / 2,
-                    (size.height - height) as i32 / 2,
-                );
-                builder = builder.with_position(position);
-            }
-        }
-        WindowMode::Fullscreen => {
-            builder = builder.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
-        }
-    }
-
-    let window = builder.build(&event_loop).unwrap();
-
-    let mut state = pollster::block_on(State::new(window));
-    let mut input = WinitInputHelper::new();
-    let mut renderer = R::new();
-    let mut render_ctx = RenderContext::new();
-
-    event_loop.run(move |event, _, control_flow| {
-        if state.input(&event) {
-            input.update(&event);
-        }
-
-        match event {
-            Event::WindowEvent {
-                ref event,
-                window_id,
-            } if window_id == state.window().id() => match event {
-                WindowEvent::CloseRequested
-                | WindowEvent::KeyboardInput {
-                    input:
-                        KeyboardInput {
-                            state: ElementState::Pressed,
-                            virtual_keycode: Some(VirtualKeyCode::Escape),
-                            ..
-                        },
-                    ..
-                } => *control_flow = ControlFlow::Exit,
-                WindowEvent::Resized(physical_size) => {
-                    state.resize(*physical_size);
-                }
-                WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                    state.resize(**new_inner_size);
-                }
-                _ => {}
-            },
-            Event::RedrawRequested(window_id) if window_id == state.window().id() => {
-                renderer.input(&input, state.view.x, state.view.y);
-                renderer.render(&mut render_ctx);
-                state.view.position = render_ctx.pos;
-                state.view.scale = render_ctx.scale;
-                state.set_instances(&render_ctx.circles);
-                state.set_vertices(&render_ctx.lines);
-                state.set_rects(&render_ctx.rects);
-
-                match state.render(&mut |ctx| renderer.gui(ctx)) {
-                    Ok(_) => {}
-                    // Reconfigure the surface if lost
-                    Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
-                    // The system is out of memory, we should probably quit
-                    Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-                    // All other errors (Outdated, Timeout) should be resolved by the next frame
-                    Err(e) => eprintln!("{:?}", e),
-                }
-            }
-            Event::MainEventsCleared => {
-                // RedrawRequested will only trigger once, unless we manually
-                // request it.
-                state.window().request_redraw();
-            }
-            _ => {}
-        }
-    });
+    event_loop
+        .unwrap()
+        .run_app(&mut AppHandler::<R> {
+            config,
+            state: None,
+            input: None,
+            renderer: None,
+            render_ctx: None,
+        })
+        .unwrap();
 }
