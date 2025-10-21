@@ -680,9 +680,11 @@ impl<R: Renderer> ApplicationHandler<()> for AppHandler<R> {
                 window_id,
                 event: event.clone(),
             };
-            state.input(&egui_event);
+            let egui_passed = state.input(&egui_event);
 
-            input.process_window_event(&event);
+            if egui_passed {
+                input.process_window_event(&event);
+            }
         }
 
         if window_id == state.window().id() {
