@@ -67,7 +67,7 @@ struct Renderer {
     texture: Option<egui::TextureHandle>,
 
     total_scroll: f32,
-    total_diff: (f32, f32)
+    total_diff: (f32, f32),
 }
 
 impl quarkstrom::Renderer for Renderer {
@@ -86,7 +86,7 @@ impl quarkstrom::Renderer for Renderer {
             texture: None,
 
             total_scroll: 0.0,
-            total_diff: (0.0, 0.0)
+            total_diff: (0.0, 0.0),
         }
     }
 
@@ -206,148 +206,153 @@ impl quarkstrom::Renderer for Renderer {
             )
         });
 
-        egui::Window::new("Quarkstrom").show(&ctx, |ui| {
-            ui.style_mut().spacing.slider_width = 300.0;
+        egui::Window::new("Quarkstrom").show(&ctx, |mut ui| {
+            egui::ScrollArea::new([true, true]).show(&mut ui, |ui| {
+                ui.style_mut().spacing.slider_width = 300.0;
 
-            self.restart = ui.button("Restart").clicked();
-            ui.separator();
+                self.restart = ui.button("Restart").clicked();
+                ui.separator();
 
-            let boundary_idx = match self.boundary {
-                Boundary::Square(_) => 0,
-                Boundary::ReflectedCircle(_) => 1,
-                Boundary::InverseCircle(_) => 2,
-                Boundary::None => 3,
-            };
+                let boundary_idx = match self.boundary {
+                    Boundary::Square(_) => 0,
+                    Boundary::ReflectedCircle(_) => 1,
+                    Boundary::InverseCircle(_) => 2,
+                    Boundary::None => 3,
+                };
 
-            let items = ["Square", "Reflected Circle", "Inverse Circle", "None"];
+                let items = ["Square", "Reflected Circle", "Inverse Circle", "None"];
 
-            ui.horizontal(|ui| {
-                for i in 0..4 {
-                    if ui.selectable_label(i == boundary_idx, items[i]).clicked() {
-                        let l = match self.boundary {
-                            Boundary::Square(s) => s / 2.0,
-                            Boundary::ReflectedCircle(r) => r,
-                            Boundary::InverseCircle(r) => r,
-                            Boundary::None => 250.0,
-                        };
-                        match i {
-                            0 => self.boundary = Boundary::Square(2.0 * l),
-                            1 => self.boundary = Boundary::ReflectedCircle(l),
-                            2 => self.boundary = Boundary::InverseCircle(l),
-                            3 => self.boundary = Boundary::None,
-                            _ => {}
-                        }
-                    }
-                }
-            });
-
-            match &mut self.boundary {
-                Boundary::Square(side) => {
-                    ui.horizontal(|ui| {
-                        let id = ui.label("Side: ").layer_id.id;
-                        ui.add(egui::Slider::new(side, 0.001..=1000.0))
-                            .labelled_by(id);
-                    });
-                }
-                Boundary::InverseCircle(radius) | Boundary::ReflectedCircle(radius) => {
-                    ui.horizontal(|ui| {
-                        let id = ui.label("Side: ").layer_id.id;
-                        ui.add(egui::Slider::new(radius, 0.001..=500.0))
-                            .labelled_by(id);
-                    });
-                }
-                Boundary::None => {}
-            }
-
-            ui.horizontal(|ui| {
-                let id = ui.label("Simulation Speed: ").layer_id.id;
-                ui.add(egui::Slider::new(&mut self.simulation_speed, 0.0..=10.0))
-                    .labelled_by(id);
-            });
-
-            ui.horizontal(|ui| {
-                let id = ui.label("Velocity Half Life: ").layer_id.id;
-                ui.add(egui::Slider::new(&mut self.velocity_half_life, 0.0..=1.0))
-                    .on_hover_text("The amount of time until the velocity halves itself.")
-                    .labelled_by(id);
-            });
-
-            ui.horizontal(|ui| {
-                let id = ui.label("Particles: ").layer_id.id;
-                ui.add(egui::Slider::new(&mut self.num_particles, 0..=64 * 256))
-                    .labelled_by(id);
-            });
-
-            let old_types = self.types;
-            ui.horizontal(|ui| {
-                let id = ui.label("Colors: ").layer_id.id;
-                if ui
-                    .add(egui::Slider::new(&mut self.types, 1..=256))
-                    .labelled_by(id)
-                    .changed()
-                {
-                    let last_matrix = self.attraction_matrix.clone();
-
-                    self.attraction_matrix = vec![0f32; self.types as usize * self.types as usize];
-
-                    for i in 0..old_types.min(self.types) {
-                        for j in 0..old_types.min(self.types) {
-                            self.attraction_matrix[(i + j * self.types) as usize] =
-                                last_matrix[(i + j * old_types) as usize];
-                        }
-                    }
-                }
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Attraction Matrix:");
-                if ui.button("Reset").clicked() {
-                    self.attraction_matrix = vec![0.0; (self.types * self.types) as usize];
-                }
-                if ui.button("Randomize").clicked() {
-                    for i in 0..self.types * self.types {
-                        self.attraction_matrix[i as usize] = fastrand::f32() * 2.0 - 1.0;
-                    }
-                }
-                if ui.button("Snake").clicked() {
-                    self.attraction_matrix = vec![0f32; self.types as usize * self.types as usize];
-                    for i in 0..self.types {
-                        if i != 0 {
-                            self.attraction_matrix[(i + (i - 1) * self.types) as usize] = 0.2;
-                        }
-                        self.attraction_matrix[(i + i * self.types) as usize] = 1.0;
-                    }
-                }
-            });
-
-            fn color(ui: &mut Ui, texture: &egui::TextureHandle, color: [u8; 4]) -> Response {
-                ui.add(
-                    egui::widgets::Button::image(texture)
-                        .fill(Color32::from_rgb(color[0], color[1], color[2]))
-                        .min_size(egui::Vec2::new(32.0, 32.0)),
-                )
-            }
-
-            ui.horizontal(|ui| {
-                color(ui, &texture, [0; 4]);
-                for i in 0..self.types as usize {
-                    color(ui, &texture, hue2rgb(i as f32 / self.types as f32));
-                }
-            });
-            for j in 0..self.types as usize {
                 ui.horizontal(|ui| {
-                    color(ui, &texture, hue2rgb(j as f32 / self.types as f32));
-                    for i in 0..self.types as usize {
-                        ui.add(
-                            egui::DragValue::new(
-                                &mut self.attraction_matrix[i + j * self.types as usize],
-                            )
-                            .speed(0.01)
-                            .fixed_decimals(3),
-                        );
+                    for i in 0..4 {
+                        if ui.selectable_label(i == boundary_idx, items[i]).clicked() {
+                            let l = match self.boundary {
+                                Boundary::Square(s) => s / 2.0,
+                                Boundary::ReflectedCircle(r) => r,
+                                Boundary::InverseCircle(r) => r,
+                                Boundary::None => 250.0,
+                            };
+                            match i {
+                                0 => self.boundary = Boundary::Square(2.0 * l),
+                                1 => self.boundary = Boundary::ReflectedCircle(l),
+                                2 => self.boundary = Boundary::InverseCircle(l),
+                                3 => self.boundary = Boundary::None,
+                                _ => {}
+                            }
+                        }
                     }
                 });
-            }
+
+                match &mut self.boundary {
+                    Boundary::Square(side) => {
+                        ui.horizontal(|ui| {
+                            let id = ui.label("Side: ").layer_id.id;
+                            ui.add(egui::Slider::new(side, 0.001..=1000.0))
+                                .labelled_by(id);
+                        });
+                    }
+                    Boundary::InverseCircle(radius) | Boundary::ReflectedCircle(radius) => {
+                        ui.horizontal(|ui| {
+                            let id = ui.label("Side: ").layer_id.id;
+                            ui.add(egui::Slider::new(radius, 0.001..=500.0))
+                                .labelled_by(id);
+                        });
+                    }
+                    Boundary::None => {}
+                }
+
+                ui.horizontal(|ui| {
+                    let id = ui.label("Simulation Speed: ").layer_id.id;
+                    ui.add(egui::Slider::new(&mut self.simulation_speed, 0.0..=10.0))
+                        .labelled_by(id);
+                });
+
+                ui.horizontal(|ui| {
+                    let id = ui.label("Velocity Half Life: ").layer_id.id;
+                    ui.add(egui::Slider::new(&mut self.velocity_half_life, 0.0..=1.0))
+                        .on_hover_text("The amount of time until the velocity halves itself.")
+                        .labelled_by(id);
+                });
+
+                ui.horizontal(|ui| {
+                    let id = ui.label("Particles: ").layer_id.id;
+                    ui.add(egui::Slider::new(&mut self.num_particles, 0..=64 * 256))
+                        .labelled_by(id);
+                });
+
+                let old_types = self.types;
+                ui.horizontal(|ui| {
+                    let id = ui.label("Colors: ").layer_id.id;
+                    if ui
+                        .add(egui::Slider::new(&mut self.types, 1..=256))
+                        .labelled_by(id)
+                        .changed()
+                    {
+                        let last_matrix = self.attraction_matrix.clone();
+
+                        self.attraction_matrix =
+                            vec![0f32; self.types as usize * self.types as usize];
+
+                        for i in 0..old_types.min(self.types) {
+                            for j in 0..old_types.min(self.types) {
+                                self.attraction_matrix[(i + j * self.types) as usize] =
+                                    last_matrix[(i + j * old_types) as usize];
+                            }
+                        }
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Attraction Matrix:");
+                    if ui.button("Reset").clicked() {
+                        self.attraction_matrix = vec![0.0; (self.types * self.types) as usize];
+                    }
+                    if ui.button("Randomize").clicked() {
+                        for i in 0..self.types * self.types {
+                            self.attraction_matrix[i as usize] = fastrand::f32() * 2.0 - 1.0;
+                        }
+                    }
+                    if ui.button("Snake").clicked() {
+                        self.attraction_matrix =
+                            vec![0f32; self.types as usize * self.types as usize];
+                        for i in 0..self.types {
+                            if i != 0 {
+                                self.attraction_matrix[(i + (i - 1) * self.types) as usize] = 0.2;
+                                self.attraction_matrix[((i - 1) + i * self.types) as usize] = -0.1;
+                            }
+                            self.attraction_matrix[(i + i * self.types) as usize] = 1.0;
+                        }
+                    }
+                });
+
+                fn color(ui: &mut Ui, texture: &egui::TextureHandle, color: [u8; 4]) -> Response {
+                    ui.add(
+                        egui::widgets::Button::image(texture)
+                            .fill(Color32::from_rgb(color[0], color[1], color[2]))
+                            .min_size(egui::Vec2::new(32.0, 32.0)),
+                    )
+                }
+
+                ui.horizontal(|ui| {
+                    color(ui, &texture, [0; 4]);
+                    for i in 0..self.types as usize {
+                        color(ui, &texture, hue2rgb(i as f32 / self.types as f32));
+                    }
+                });
+                for j in 0..self.types as usize {
+                    ui.horizontal(|ui| {
+                        color(ui, &texture, hue2rgb(j as f32 / self.types as f32));
+                        for i in 0..self.types as usize {
+                            ui.add(
+                                egui::DragValue::new(
+                                    &mut self.attraction_matrix[i + j * self.types as usize],
+                                )
+                                .speed(0.01)
+                                .fixed_decimals(3),
+                            );
+                        }
+                    });
+                }
+            });
         });
 
         RENDERER_CLONE.lock().push(self.clone());
