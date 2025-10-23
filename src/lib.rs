@@ -24,9 +24,6 @@ use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 use winit_input_helper::WinitInputHelper;
 
-#[cfg(target_arch = "wasm32")]
-use winit::platform::web::{WindowExtWebSys, WindowAttributesExtWebSys};
-
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct View {
@@ -161,13 +158,7 @@ impl State {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 required_features: wgpu::Features::default(),
-                // WebGL doesn't support all of wgpu's features, so if
-                // we're building for the web we'll have to disable some.
-                required_limits: if cfg!(target_arch = "wasm32") {
-                    wgpu::Limits::downlevel_webgl2_defaults()
-                } else {
-                    wgpu::Limits::default()
-                },
+                required_limits: wgpu::Limits::default(),
                 label: None,
                 experimental_features: Default::default(),
                 memory_hints: Default::default(),
@@ -628,7 +619,7 @@ struct AppHandler<R: Renderer> {
     render_ctx: Option<RenderContext>,
 }
 
-impl<R: Renderer + 'static> ApplicationHandler<()> for AppHandler<R> {
+impl<R: Renderer> ApplicationHandler<()> for AppHandler<R> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let mut builder = WindowAttributes::default().with_title("Quarkstrom");
 
@@ -658,39 +649,7 @@ impl<R: Renderer + 'static> ApplicationHandler<()> for AppHandler<R> {
             .create_window(builder)
             .expect("Failed to create window.");
 
-        #[cfg(target_arch = "wasm32")]
-        {
-            let canvas = window.canvas().expect("Failed to create canvas");
-
-            canvas.set_id("quarkstrom-canvas");
-
-            let window = web_sys::window().expect("Failed to get web window");
-            let document = window.document().expect("Failed to get web document");
-            let body = document.body().expect("Failed to get document body");
-            body.append_child(&canvas.as_ref())
-                .expect("Failed to add canvas");
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            use wasm_bindgen_futures::spawn_local;
-
-            let handler_ptr: *mut AppHandler<R> = self as *mut _;
-
-            spawn_local(async move {
-                let s = State::new(Arc::new(window)).await;
-                // SAFETY: `handler_ptr` points to the AppHandler instance
-                // that lives for the duration of the application. Writing to
-                // its `state` field here is safe in this usage pattern.
-                unsafe {
-                    (*handler_ptr).state = Some(s);
-                }
-            });
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.state = Some(pollster::block_on(State::new(Arc::new(window))));
-        }
+        self.state = Some(pollster::block_on(State::new(Arc::new(window))));
         self.input = Some(WinitInputHelper::new());
         self.renderer = Some(R::new());
         self.render_ctx = Some(RenderContext::new());

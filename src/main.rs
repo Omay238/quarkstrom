@@ -10,33 +10,11 @@ use ultraviolet::Vec2;
 
 use once_cell::sync::Lazy;
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::thread::spawn;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen_futures::spawn_local as spawn;
-
 // Used to communicate between the simulation and renderer threads
 static PARTICLES: Lazy<Mutex<Option<Vec<Particle>>>> = Lazy::new(|| Mutex::new(None));
 static RENDERER_CLONE: Lazy<Mutex<Vec<Renderer>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
-async fn update_simulation(simulation: &mut Simulation, desired_frame_time: &Option<Duration>) {
-    loop {
-        let frame_timer = Instant::now();
-
-        simulation.update();
-        simulation.convert();
-
-        // Cap tps
-        if let Some(desired_frame_time) = desired_frame_time {
-            while frame_timer.elapsed() < *desired_frame_time {}
-        }
-    }
-}
-
 fn main() {
-    #[cfg(target_arch = "wasm32")]
-    console_error_panic_hook::set_once();
-
     let config = quarkstrom::Config {
         window_mode: quarkstrom::WindowMode::Windowed(1280, 720),
     };
@@ -48,14 +26,18 @@ fn main() {
 
     let mut simulation = Simulation::new();
 
-    // Really stupid solution to make it work on both web and native
-    #[cfg(target_arch = "wasm32")]
-    spawn(async move {
-        update_simulation(&mut simulation, &desired_frame_time).await
-    });
-    #[cfg(not(target_arch = "wasm32"))]
-    spawn(async move || {
-        update_simulation(&mut simulation, &desired_frame_time).await
+    std::thread::spawn(move || {
+        loop {
+            let frame_timer = Instant::now();
+
+            simulation.update();
+            simulation.convert();
+
+            // Cap tps
+            if let Some(desired_frame_time) = desired_frame_time {
+                while frame_timer.elapsed() < desired_frame_time {}
+            }
+        }
     });
 
     quarkstrom::run::<Renderer>(config);
