@@ -1,5 +1,6 @@
 /target
+/dist
 /Cargo.lock
 
 .DS_Store
-.idea/
+/.idea
