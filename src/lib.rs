@@ -712,7 +712,7 @@ impl<R: Renderer> ApplicationHandler<()> for AppHandler<R> {
 
     fn window_event(
         &mut self,
-        _event_loop: &ActiveEventLoop,
+        event_loop: &ActiveEventLoop,
         window_id: WindowId,
         event: WindowEvent,
     ) {
@@ -748,7 +748,7 @@ impl<R: Renderer> ApplicationHandler<()> for AppHandler<R> {
                             ..
                         },
                     ..
-                } => return,
+                } => event_loop.exit(),
                 WindowEvent::Resized(physical_size) => {
                     state.resize(physical_size);
                 }
@@ -770,7 +770,7 @@ impl<R: Renderer> ApplicationHandler<()> for AppHandler<R> {
                         // Reconfigure the surface if lost
                         Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
                         // The system is out of memory, we should probably quit
-                        Err(wgpu::SurfaceError::OutOfMemory) => return,
+                        Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
                         // All other errors (Outdated, Timeout) should be resolved by the next frame
                         Err(e) => eprintln!("{:?}", e),
                     }
