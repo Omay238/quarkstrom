@@ -1,32 +1,42 @@
+//! Quarkstrom
+//! Quarkstrom = Quark + Maestrom
+//!
+//! A rendering engine for particle physics engines.
+
+#![warn(missing_docs)]
+
+/// Collection of GUI helpers
 pub mod gui;
 
 pub use egui;
-use std::sync::Arc;
 pub use wgpu;
 pub use winit;
 pub use winit_input_helper;
 
-use bytemuck::{Pod, Zeroable};
-
 use crate::gui::GuiHandler;
+
+use std::sync::Arc;
+use bytemuck::{Pod, Zeroable};
 use ultraviolet::Vec2;
-use wgpu::StoreOp;
+
+use wgpu::{
+    StoreOp,
+    util::DeviceExt
+};
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::*,
     event_loop::EventLoopBuilder,
     window::{Window, WindowAttributes},
+    application::ApplicationHandler,
+    event_loop::ActiveEventLoop,
+    window::WindowId
 };
-
-use wgpu::util::DeviceExt;
-use winit::application::ApplicationHandler;
-use winit::event_loop::ActiveEventLoop;
-use winit::window::WindowId;
 use winit_input_helper::WinitInputHelper;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct View {
+struct View {
     position: Vec2,
     scale: f32,
     x: u16,
@@ -38,10 +48,10 @@ unsafe impl Zeroable for View {}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct Rect {
-    pub min: Vec2,
-    pub max: Vec2,
-    pub color: [u8; 4],
+struct Rect {
+    min: Vec2,
+    max: Vec2,
+    color: [u8; 4],
 }
 
 unsafe impl Pod for Rect {}
@@ -62,9 +72,9 @@ impl Rect {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct Vertex {
-    pub pos: Vec2,
-    pub color: [u8; 4],
+struct Vertex {
+    pos: Vec2,
+    color: [u8; 4],
 }
 
 unsafe impl Pod for Vertex {}
@@ -85,10 +95,10 @@ impl Vertex {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
-pub struct Instance {
-    pub position: Vec2,
-    pub radius: f32,
-    pub color: [u8; 4],
+struct Instance {
+    position: Vec2,
+    radius: f32,
+    color: [u8; 4],
 }
 
 unsafe impl Pod for Instance {}
@@ -422,6 +432,7 @@ impl State {
         }
     }
 
+    /// Get the window from the state
     pub fn window(&self) -> &Window {
         &self.window
     }
@@ -537,13 +548,18 @@ impl State {
 }
 
 #[derive(Clone, Copy)]
+/// An enum specifying the mode for the window
+/// Windowed or Fullscreen
+/// If windowed, two numbers correspond to the width and the height of the window
 pub enum WindowMode {
     Windowed(u32, u32),
     Fullscreen,
 }
 
 #[derive(Clone, Copy)]
+/// Configuration for a Quarkstrom
 pub struct Config {
+    /// A WindowMode enum that the window will be created with
     pub window_mode: WindowMode,
 }
 
@@ -745,6 +761,8 @@ impl<R: Renderer> ApplicationHandler<()> for AppHandler<R> {
     }
 }
 
+/// The function to run the project
+/// Takes in a Quarkstrom Config
 pub fn run<R>(config: Config)
 where
     R: Renderer + 'static,
