@@ -549,10 +549,10 @@ impl State {
 
 #[derive(Clone, Copy)]
 /// An enum specifying the mode for the window
-/// Windowed or Fullscreen
-/// If windowed, two numbers correspond to the width and the height of the window
 pub enum WindowMode {
+    /// Create a windowed window. Two u32s signify width and height, respectively.
     Windowed(u32, u32),
+    /// Create a fullscreen window.
     Fullscreen,
 }
 
@@ -563,6 +563,8 @@ pub struct Config {
     pub window_mode: WindowMode,
 }
 
+/// The content where all of your points, lines, and rects should be stored,
+/// along with the position and scale of the view.
 pub struct RenderContext {
     pos: Vec2,
     scale: f32,
@@ -582,22 +584,31 @@ impl RenderContext {
         }
     }
 
+    /// Reposition the renderer view
+    ///
+    /// * `pos` - The desired position of the view
     pub fn set_view_pos(&mut self, pos: Vec2) {
         self.pos = pos;
     }
 
+    /// Rescale the renderer view
+    ///
+    /// * `scale` - The desired scale of the view
     pub fn set_view_scale(&mut self, scale: f32) {
         self.scale = scale;
     }
 
+    /// Remove all rects from the buffer
     pub fn clear_rects(&mut self) {
         self.rects.clear();
     }
 
+    /// Remove all lines from the buffer
     pub fn clear_lines(&mut self) {
         self.lines.clear();
     }
 
+    /// Remove all circles from the buffer
     pub fn clear_circles(&mut self) {
         self.circles.clear();
     }
@@ -762,7 +773,8 @@ impl<R: Renderer> ApplicationHandler<()> for AppHandler<R> {
 }
 
 /// The function to run the project
-/// Takes in a Quarkstrom Config
+///
+/// * `config` - A Quarkstrom Config to create the window with
 pub fn run<R>(config: Config)
 where
     R: Renderer + 'static,
