@@ -1,9 +1,7 @@
 //! Quarkstrom
-//! Quarkstrom = Quark + Maestrom
+//! Quarkstrom = Quark + Maelstrom
 //!
 //! A rendering engine for particle physics engines.
-
-#![warn(missing_docs)]
 
 /// Collection of GUI helpers
 pub mod gui;
@@ -573,6 +571,7 @@ pub struct RenderContext {
     rects: Vec<Rect>,
 }
 
+/// Contains the necessary functions to manage the scene rendering.
 impl RenderContext {
     fn new() -> Self {
         Self {
@@ -608,11 +607,16 @@ impl RenderContext {
         self.lines.clear();
     }
 
-    /// Remove all circles from the buffer
+    /// Remove all points from the buffer
     pub fn clear_circles(&mut self) {
         self.circles.clear();
     }
 
+    /// Add a point to the buffer
+    ///
+    /// * `position` - The position to create the point
+    /// * `radius` - The radius of the point
+    /// * `color` - A 4 element array of the color in RGBA
     pub fn draw_circle(&mut self, position: Vec2, radius: f32, color: [u8; 4]) {
         self.circles.push(Instance {
             position,
@@ -621,20 +625,44 @@ impl RenderContext {
         });
     }
 
+    /// Add a line to the buffer
+    ///
+    /// * `src` - The starting position of the line
+    /// * `dst` - The ending position of the line
+    /// * `color` - A 4 element array of the color in RGBA
     pub fn draw_line(&mut self, src: Vec2, dst: Vec2, color: [u8; 4]) {
         self.lines.push(Vertex { pos: src, color });
         self.lines.push(Vertex { pos: dst, color });
     }
 
+    /// Add a point to the buffer
+    ///
+    /// * `min` - The minimum x and y positions of the rectangle
+    /// * `max` - The maximum x and y positions of the rectangle
+    /// * `color` - A 4 element array of the color in RGBA
     pub fn draw_rect(&mut self, min: Vec2, max: Vec2, color: [u8; 4]) {
         self.rects.push(Rect { min, max, color });
     }
 }
 
+/// The main Renderer trait. Used in the "run" function
 pub trait Renderer {
+    /// Function to create a new renderer. Initialize with reasonable defaults.
     fn new() -> Self;
+    /// Function to receive input.
+    ///
+    /// * `input` - The input helper.
+    /// * `width` - The width of the window when the input is received.
+    /// * `height` - The height of the window when the input is received.
     fn input(&mut self, input: &WinitInputHelper, width: u16, height: u16);
+    /// Function to render your points.
+    ///
+    /// * `ctx` - A RenderContext to manage the rendering of the scene for that frame.
+    /// > You can't modify points here, so remember to recreate all of them.
     fn render(&mut self, ctx: &mut RenderContext);
+    /// Function to render and interact with your GUI
+    ///
+    /// * `ctx` - An egui context to create your UI in.
     fn gui(&mut self, ctx: &egui::Context);
 }
 
