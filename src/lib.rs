@@ -13,22 +13,19 @@ pub use winit_input_helper;
 
 use crate::gui::GuiHandler;
 
-use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
+use std::sync::Arc;
 use ultraviolet::Vec2;
 
-use wgpu::{
-    StoreOp,
-    util::DeviceExt
-};
+use wgpu::{StoreOp, util::DeviceExt};
 use winit::{
+    application::ApplicationHandler,
     dpi::{PhysicalPosition, PhysicalSize},
     event::*,
-    event_loop::EventLoopBuilder,
-    window::{Window, WindowAttributes},
-    application::ApplicationHandler,
     event_loop::ActiveEventLoop,
-    window::WindowId
+    event_loop::EventLoopBuilder,
+    window::WindowId,
+    window::{Window, WindowAttributes},
 };
 use winit_input_helper::WinitInputHelper;
 
